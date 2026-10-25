@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#080f24" />
+  <title>Dimensional Rush — Protótipo 0.1</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#080f24; font-family:system-ui,-apple-system,Segoe UI,sans-serif; }
+    #game { width:100%; height:100%; display:flex; align-items:center; justify-content:center; touch-action:none; }
+    #game canvas { display:block; touch-action:none; }
+    #loading { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); color:#cce9f9; text-align:center; font-size:14px; max-width:80vw; line-height:1.5; pointer-events:none; }
+    #turn {display:none;position:fixed;inset:0;z-index:20;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(7,14,32,.97);color:white;text-align:center;padding:24px;}
+    #turn strong {font-size:24px;} #turn small {font-size:15px;color:#abc1d3;line-height:1.5}
+    @media (orientation:portrait) and (max-width:800px) { #turn{display:flex;} }
+  </style>
+  <!-- Phaser 3.90 é carregado pela internet; as artes são geradas no próprio jogo. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.90.0/phaser.min.js"></script>
+</head>
+<body>
+  <div id="game"><div id="loading">Carregando Dimensional Rush...<br>Se a tela não abrir, verifique a conexão com a internet.</div></div>
+  <div id="turn"><span style="font-size:52px;">↻</span><strong>Vire o celular</strong><small>Este protótipo foi feito para jogar<br>com a tela na horizontal.</small></div>
+  <script>
+  'use strict';
+  if (!window.Phaser) {
+    document.getElementById('loading').innerHTML = 'Não foi possível carregar o motor do jogo.<br>Conecte-se à internet e atualize esta página.';
+  } else {
+    const W = 960, H = 540, LEVEL_WIDTH = 3040;
+    const ORB_POINTS = [310, 540, 955, 1250, 1460, 1770, 2010, 2510, 2750];
+
+    class Stage extends Phaser.Scene {
+      constructor() { super('stage'); }
+
+      create() {
+        document.getElementById('loading').remove();
+        this.cameras.main.setBackgroundColor('#0b1935');
+        this.physics.world.setBounds(0, -120, LEVEL_WIDTH, 800);
+        this.makeTextures();
+        this.drawBackground();
+        this.drawPlatforms();
+        this.drawCollectibles();
+        this.makePlayer();
+        this.makePortal();
+        this.setupControls();
+        this.makeHUD();
+
+        this.orbCount = 0;
+        this.failedJumps = 0;
+        this.finished = false;
+        this.checkpointX = 115;
+        this.dashUntil = 0;
+        this.nextDash = 0;
+        this.startedAt = this.time.now;
+        this.facing = 1;
+
+        this.cameras.main.setBounds(0, 0, LEVEL_WIDTH, H);
+        this.cameras.main.startFollow(this.player, true, 0.085, 0.08, -85, 35);
+        this.cameras.main.setDeadzone(170, 90);
+        this.physics.add.collider(this.player, this.platforms);
+        this.physics.add.overlap(this.player, this.orbs, (_player, orb) => this.collectOrb(orb));
+        this.physics.add.overlap(this.player, this.portal, () => this.reachEnd());
+      }
+
+      makeTextures() {
+        const g = this.make.graphics({x:0, y:0, add:false});
+        // Personagem provisório. Depois trocaremos pelo sprite original.
+        g.fillStyle(0x111729, 1); g.fillRoundedRect(8,19,32,43,10);
+        g.fillStyle(0xde344b, 1); g.fillRoundedRect(8,35,32,9,3);
+        g.fillStyle(0x111729, 1); g.fillRoundedRect(9,0,30,29,9);
+        g.fillStyle(0xffdcac,1); g.fillRoundedRect(11,15,26,12,4);
+        g.fillStyle(0x171b34,1); g.fillRoundedRect(9,16,30,10,3);
+        g.fillStyle(0x69edf5,1); g.fillRect(15,19,8,3); g.fillRect(27,19,8,3);
+        g.fillStyle(0xd62946,1); g.fillTriangle(34,33,47,39,35,43);
+        g.fillStyle(0x14182b,1); g.fillRect(10,58,10,10); g.fillRect(29,58,10,10);
+        g.fillStyle(0xf46b77,1); g.fillRect(10,64,11,4); g.fillRect(29,64,11,4);
+        g.generateTexture('hero',48,68); g.clear();
+
+        g.fillStyle(0x182c48); g.fillRect(0,0,64,100);
+        g.fillStyle(0x285272); g.fillRect(0,0,64,10);
+        g.fillStyle(0x4bdfc2); g.fillRect(0,0,64,5);
+        g.lineStyle(2,0x244366,.62); g.strokeRect(0,10,64,90);
+        g.lineBetween(0,42,64,42); g.lineBetween(32,10,32,100);
+        g.generateTexture('ground',64,100); g.clear();
+
+        g.fillStyle(0x5fe1f4,.22); g.fillCircle(20,20,20);
+        g.lineStyle(3,0x6ff7ff,.9); g.strokeCircle(20,20,12);
+        g.fillStyle(0xc6f7ff,1); g.fillCircle(20,20,6);
+        g.generateTexture('orb',40,40); g.clear();
+
+        g.fillStyle(0x62ffe7,.08); g.fillRoundedRect(0,0,78,144,30);
+        g.lineStyle(4,0x5ee6dc,.86); g.strokeRoundedRect(6,6,66,132,28);
+        g.lineStyle(2,0xd0fffa,.6); g.strokeRoundedRect(17,18,44,108,21);
+        g.fillStyle(0x5cf1ff,.16); g.fillRoundedRect(20,21,38,102,18);
+        g.generateTexture('portal',78,144); g.destroy();
+      }
+
+      drawBackground() {
+        const sky = this.add.graphics().setScrollFactor(0);
+        for (let n=0;n<24;n++) {
+          const p=n/24;
+          const color=Phaser.Display.Color.Interpolate.ColorWithColor(
+            Phaser.Display.Color.ValueToColor(0x081327),
+            Phaser.Display.Color.ValueToColor(0x183e65),24,n);
+          sky.fillStyle(Phaser.Display.Color.GetColor(color.r,color.g,color.b));
+          sky.fillRect(0,n*26, W,27);
+        }
+        sky.fillStyle(0x6dcfff,.14); sky.fillCircle(790,120,105);
+        sky.fillStyle(0x70e6ff,.35); sky.fillCircle(790,120,51);
+        const far = this.add.graphics().setScrollFactor(.08);
+        for (let i=-1;i<13;i++) {
+          let x=i*290;
+          far.fillStyle(0x112b50,.72);
+          far.fillTriangle(x-85,457,x+80,245+(i%3)*20,x+245,457);
+        }
+        const near=this.add.graphics().setScrollFactor(.24);
+        for (let i=-1;i<18;i++) {
+          const x=i*175;
+          near.fillStyle(i%2 ? 0x153b56 : 0x1a445c,.92);
+          near.fillTriangle(x-100,465,x+35,333+(i%4)*17,x+170,465);
+          near.lineStyle(2,0x306a80,.4); near.lineBetween(x+35,333+(i%4)*17,x+170,465);
+        }
+        const stars=this.add.graphics().setScrollFactor(.04);
+        for (let i=0;i<45;i++) {
+          let x=(i*137+47) % 965, y=(i*67+23) % 235;
+          stars.fillStyle(0xe5faff,i%3===0?.7:.3); stars.fillCircle(x,y,i%7===0?2:1);
+        }
+      }
+
+      drawPlatforms() {
+        this.platforms = this.physics.add.staticGroup();
+        const segments = [[0,730],[850,1580],[1700,2300],[2410,3040]];
+        for (const [from,to] of segments) {
+          const platform=this.platforms.create((from+to)/2,510,'ground');
+          platform.setDisplaySize(to-from,120).refreshBody();
+          // Vegetação/linhas de energia para destacar cada trecho de piso.
+          const stripe=this.add.rectangle((from+to)/2,452,to-from,3,0x5bf4d0,.6).setDepth(2);
+          stripe.setOrigin(.5,.5);
+        }
+        const markings=this.add.graphics().setDepth(2);
+        for (let i=110;i<LEVEL_WIDTH;i+=140) {
+          if (segments.some(([a,b])=>i>a+20 && i<b-20)) {
+            markings.lineStyle(2,0x80e9ed,.25); markings.lineBetween(i,480,i+45,480);
+          }
+        }
+        [720,1570,2290].forEach(x=>{
+          this.add.triangle(x,441,0,0,14,0,7,-14,0xffd268,.95).setDepth(4);
+        });
+        // Plataformas elevadas para praticar o salto.
+        this.addElevatedPlatform(390,355,130);
+        this.addElevatedPlatform(1160,340,150);
+        this.addElevatedPlatform(1990,352,130);
+      }
+
+      addElevatedPlatform(cx, top, width) {
+        const p=this.platforms.create(cx,top+17,'ground');
+        p.setDisplaySize(width,34).refreshBody();
+        this.add.rectangle(cx,top+2,width,3,0x8df2df,.7).setDepth(2);
+      }
+
+      drawCollectibles() {
+        this.orbs = this.physics.add.staticGroup();
+        ORB_POINTS.forEach((x,i)=>{
+          const y=(i===1 || i===3 || i===6) ? 292 : 390;
+          const orb=this.orbs.create(x,y,'orb');
+          orb.setDepth(4).refreshBody();
+          this.add.circle(x,y,23,0x6ff7ff,.07).setDepth(3);
+        });
+      }
+
+      makePlayer() {
+        this.player=this.physics.add.sprite(115,340,'hero');
+        this.player.setDepth(6);
+        this.player.body.setSize(30,62).setOffset(9,5);
+        this.player.setMaxVelocity(720,950);
+        this.player.setCollideWorldBounds(false);
+        this.player.setDragX(1550);
+      }
+
+      makePortal() {
+        this.portal=this.physics.add.staticSprite(2930,376,'portal').setDepth(3);
+        this.add.text(2930,267,'SAÍDA',{
+          fontFamily:'Arial,sans-serif',fontSize:'20px',fontStyle:'bold',color:'#d6fffb'
+        }).setOrigin(.5);
+        this.tweens.add({targets:this.portal,alpha:{from:.6,to:1},duration:1050,yoyo:true,repeat:-1});
+      }
+
+      setupControls() {
+        this.input.addPointer(3);
+        this.cursors=this.input.keyboard.createCursorKeys();
+        this.keys=this.input.keyboard.addKeys('A,D,W,SPACE,SHIFT,X,Z,R');
+        this.touch={left:new Set(),right:new Set()};
+        this.jumpQueued=false;
+        this.dashQueued=false;
+        this.buttons=[];
+        this.makeButton(88,466,66,'◀',0x264d6c,(pointer)=>this.touch.left.add(pointer.id));
+        this.makeButton(174,466,66,'▶',0x264d6c,(pointer)=>this.touch.right.add(pointer.id));
+        this.makeButton(786,465,70,'PULO',0x217f92,()=>{this.jumpQueued=true;});
+        this.makeButton(882,465,70,'DASH',0xa13d67,()=>{this.dashQueued=true;});
+        this.input.on('pointerup',p=>{
+          this.touch.left.delete(p.id);
+          this.touch.right.delete(p.id);
+        });
+        this.input.on('gameout',()=>{
+          this.touch.left.clear(); this.touch.right.clear();
+        });
+        this.input.keyboard.on('keydown-R',()=>{
+          if (this.finished) this.scene.restart();
+        });
+      }
+
+      makeButton(x,y,r,label,color,handler) {
+        const circle=this.add.circle(x,y,r/2,color,.68)
+          .setStrokeStyle(2,0xb2edfd,.47).setScrollFactor(0).setDepth(101)
+          .setInteractive(new Phaser.Geom.Circle(r/2,r/2,r/2),Phaser.Geom.Circle.Contains);
+        this.add.text(x,y,label,{
+          fontFamily:'Arial,sans-serif',fontSize:label.length>2?'15px':'26px',
+          fontStyle:'bold',color:'#effcff'
+        }).setOrigin(.5).setScrollFactor(0).setDepth(102);
+        circle.on('pointerdown',p=>{
+          handler(p);
+          this.tweens.add({targets:circle,scale:.91,duration:85,yoyo:true});
+        });
+        this.buttons.push(circle);
+      }
+
+      makeHUD() {
+        this.add.rectangle(480,35,935,60,0x07142a,.63).setScrollFactor(0).setDepth(90)
+          .setStrokeStyle(1,0x45748b,.4);
+        this.add.text(27,17,'DIMENSIONAL RUSH',{
+          fontFamily:'Arial,sans-serif',fontSize:'20px',fontStyle:'bold',color:'#e9f8ff'
+        }).setScrollFactor(0).setDepth(91);
+        this.hud=this.add.text(744,20,'ENERGIAS 0 / 9',{
+          fontFamily:'Arial,sans-serif',fontSize:'17px',fontStyle:'bold',color:'#88f4ef'
+        }).setScrollFactor(0).setDepth(91);
+        this.add.text(479,55,'SETAS / A,D = MOVER   •   ESPAÇO = PULAR   •   SHIFT = DASH',{
+          fontFamily:'Arial,sans-serif',fontSize:'11px',color:'#a4c6d6'
+        }).setOrigin(.5).setScrollFactor(0).setDepth(91);
+        this.notice=this.add.text(480,103,'Encontre o portal no final da fase!',{
+          fontFamily:'Arial,sans-serif',fontSize:'18px',color:'#e7f4ff',backgroundColor:'#112541',
+          padding:{x:16,y:9}
+        }).setOrigin(.5).setScrollFactor(0).setDepth(91);
+        this.time.delayedCall(4200,()=>{
+          if (this.notice && this.notice.active) this.tweens.add({targets:this.notice,alpha:0,duration:600});
+        });
+        this.add.text(17,526,'PROTÓTIPO 0.1 • personagem provisório',{
+          fontFamily:'Arial,sans-serif',fontSize:'11px',color:'#b0c7d4'
+        }).setOrigin(0,1).setScrollFactor(0).setDepth(95);
+      }
+
+      collectOrb(orb) {
+        if (!orb.active || this.finished) return;
+        orb.disableBody(true,true);
+        this.orbCount++;
+        this.hud.setText('ENERGIAS '+this.orbCount+' / '+ORB_POINTS.length);
+        const glow=this.add.circle(orb.x,orb.y,12,0x7cf9ff,.8).setDepth(7);
+        this.tweens.add({targets:glow,scale:2.5,alpha:0,duration:260,onComplete:()=>glow.destroy()});
+      }
+
+      burstDash() {
+        const ghost=this.add.image(this.player.x,this.player.y,'hero')
+          .setDepth(4).setAlpha(.48).setTint(0x72eaff).setFlipX(this.player.flipX);
+        this.tweens.add({targets:ghost,alpha:0,scale:1.25,duration:230,onComplete:()=>ghost.destroy()});
+      }
+
+      reachEnd() {
+        if (this.finished) return;
+        this.finished=true;
+        this.player.setVelocity(0,0);
+        this.physics.pause();
+        const seconds=Math.max(1,Math.round((this.time.now-this.startedAt)/1000));
+        this.add.rectangle(480,270,620,282,0x071629,.96).setScrollFactor(0).setDepth(200)
+          .setStrokeStyle(3,0x62e8e4,.9);
+        this.add.text(480,192,'FASE CONCLUÍDA!',{
+          fontFamily:'Arial,sans-serif',fontSize:'43px',fontStyle:'bold',color:'#82fff0'
+        }).setOrigin(.5).setScrollFactor(0).setDepth(201);
+        this.add.text(480,262,`Energias: ${this.orbCount}/${ORB_POINTS.length}   •   Tempo: ${seconds}s`,{
+          fontFamily:'Arial,sans-serif',fontSize:'22px',color:'#e8f8ff'
+        }).setOrigin(.5).setScrollFactor(0).setDepth(201);
+        const restart=this.add.text(480,334,'TOQUE PARA JOGAR DE NOVO',{
+          fontFamily:'Arial,sans-serif',fontSize:'19px',fontStyle:'bold',color:'#071629',
+          backgroundColor:'#83f1e9',padding:{x:20,y:14}
+        }).setOrigin(.5).setScrollFactor(0).setDepth(202).setInteractive({useHandCursor:true});
+        restart.on('pointerdown',()=>this.scene.restart());
+      }
+
+      update(time) {
+        if (this.finished || !this.player.body) return;
+        const left=this.cursors.left.isDown || this.keys.A.isDown || this.touch.left.size>0;
+        const right=this.cursors.right.isDown || this.keys.D.isDown || this.touch.right.size>0;
+        const grounded=this.player.body.blocked.down || this.player.body.touching.down;
+        const jump = Phaser.Input.Keyboard.JustDown(this.cursors.up) ||
+          Phaser.Input.Keyboard.JustDown(this.cursors.space) ||
+          Phaser.Input.Keyboard.JustDown(this.keys.W) ||
+          Phaser.Input.Keyboard.JustDown(this.keys.SPACE) || this.jumpQueued;
+        const dash = Phaser.Input.Keyboard.JustDown(this.keys.SHIFT) ||
+          Phaser.Input.Keyboard.JustDown(this.keys.X) ||
+          Phaser.Input.Keyboard.JustDown(this.keys.Z) || this.dashQueued;
+        this.jumpQueued=false;
+        this.dashQueued=false;
+
+        if (left !== right) this.facing=right?1:-1;
+        this.player.setFlipX(this.facing<0);
+        if (dash && time >= this.nextDash) {
+          this.dashUntil=time+180;
+          this.nextDash=time+900;
+          this.burstDash();
+        }
+        if (time < this.dashUntil) {
+          this.player.setVelocityX(this.facing*670);
+          if (time%65<20) this.burstDash();
+        } else if (left !== right) {
+          this.player.setVelocityX(this.facing*320);
+        } else {
+          this.player.setVelocityX(0);
+        }
+        if (jump && grounded) this.player.setVelocityY(-535);
+        if (this.player.x < 21) this.player.setX(21);
+        if (this.player.x > LEVEL_WIDTH - 22) this.player.setX(LEVEL_WIDTH-22);
+        if (this.player.x>2405) this.checkpointX=2460;
+        else if (this.player.x>1695) this.checkpointX=1755;
+        else if (this.player.x>845) this.checkpointX=905;
+        if (this.player.y>575) {
+          this.failedJumps++;
+          this.player.setPosition(this.checkpointX,345);
+          this.player.setVelocity(0,0);
+          this.dashUntil=0;
+          this.cameras.main.flash(190,255,102,135,false);
+        }
+      }
+    }
+
+    new Phaser.Game({
+      type:Phaser.AUTO, parent:'game', width:W,height:H,
+      backgroundColor:'#0b1935',
+      scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},
+      physics:{default:'arcade',arcade:{gravity:{y:1150},debug:false}},
+      render:{pixelArt:false,antialias:true},
+      scene:Stage
+    });
+  }
+  </script>
+</body>
+</html>
